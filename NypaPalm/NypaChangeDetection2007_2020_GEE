@@ -1,0 +1,142 @@
+//=====================================================================================================================
+//                                        NASA - University of Maryland (ESSIC)
+// Remote Sensing of Nypa Palm in the Niger Delta
+//
+// Project: Niger Delta Landcover Changes 
+// Code: Nypa Landcover Changes
+// Written by: Abigail Barenblitt, NASA Goddard and University of Maryland 
+// Co-authors: Lola Fatoyinbo, NASA Goddard; Celio de Sousa, UMBC
+// Objective: This code overlays previously produces landcover changes to compare and visualize changes in
+// landcover type on a pixel-by-pixel basis
+
+//=====================================================================================================================
+
+var paletteMAP = [
+'#440154FF', // Purple, Nypa Palm(Class value 1)
+'#39568CFF', // Dark Blue, Water (Class value 4) 
+'#29AF7FFF',//Light Green, Mangrove (Class value 5)
+
+]; 
+
+Map.centerObject(studyArea,9)
+
+
+//Subset to Nypa Areas Only
+var cl2007 = img2007.select('Class_mode').eq(1).clip(geometry)//.clip(region)
+var cl2020 = img2020.select('Class_mode').eq(1).clip(geometry)//.clip(region)
+
+
+
+var img2007B = img2007.remap([1,4,5],[1,2,3]) 
+                        
+          
+print(img2007B)
+
+
+
+var img2020B = img2020.remap([1,4,5],[6,7,8])
+                        
+
+print(img2020B)
+
+//Map.addLayer (east, {min: 1, max: 5, palette:paletteMAP}, 'Classification Sentinel SAR East 2020');
+Map.addLayer (img2007.select('Class_mode').selfMask().clip(geometry), {min: 1, max: 5, palette:paletteMAP}, 'Classification Sentinel SAR East 2007');
+Map.addLayer (img2020.select('Class_mode').selfMask().clip(geometry), {min: 1, max: 5, palette:paletteMAP}, 'Classification Sentinel SAR East 2020');
+
+// var sub = cl2020.subtract(cl2015).select('b1').gt(0)
+
+// Map.addLayer (sub.selfMask(), {palette:'#29AF7FFF'}, 'Subtraction');
+// print(sub)
+
+
+
+//Calculate total change across all cover types
+var mult = img2007B.multiply(img2020B)
+
+var palettes = require('users/gena/packages:palettes');
+var palette = palettes.colorbrewer.YlOrRd[9]
+var yodVizParms = {
+  min: 6,
+  max: 24,
+  palette: palette
+};
+
+Map.addLayer (mult.clip(geometry), yodVizParms, 'Pixel Change')
+
+//Values
+//6 = No Change Nypa
+//7 = Nypa to Water
+//8 = Nypa to Mangrove
+//12 = Water to Nypa
+//14 = No Change Water
+//16 = Water to Mangroves
+//18 = Mangrove to Nypa
+//21 = Mangrove to Water
+//24 = No Change Mangrove
+
+//Values 6, 14, and 24 indicate no change
+print(mult)
+
+var mask = mult.eq(7)
+          .or(mult.eq(8))
+          .or(mult.eq(12))
+          .or(mult.eq(16))
+          .or(mult.eq(18))
+          .or(mult.eq(21))
+
+
+// var maskedChange = mult.updateMask(mask).clip(studyArea)
+
+// var mask = mult.eq(6)
+//           .or(mult.eq(14))
+//           .or(mult.eq(24))
+
+
+
+var maskedChange = mult.updateMask(mask).clip(geometry)
+
+var palette = ['#9400D3', //Light Purple (Nypa to Water)
+              '#0000FF', //Dark Purple (Nypa to Mangrove)
+              '#00FF00', //Green (Water to Nypa)
+              '#FFFF00', //Yellow (Water to Mangrove)
+              '#FF7F00', //Orange (Mangrove to Nypa)
+              '#FF0000'];//Red  (Mangrove to Water)
+var yodVizParms2 = {
+  min: 7,
+  max: 21,
+  palette: palette
+};
+
+print(maskedChange)
+var nypaTotal = ee.Number(maskedChange.eq(18).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: geometry,
+                  reducer: ee.Reducer.sum(),
+                  scale:10, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('remapped')).divide(10000)
+  
+print(nypaTotal, 'Total Mangrove to Nypa Change in Hectares')
+
+Map.addLayer (maskedChange.clip(geometry), yodVizParms2, 'Pixel Change Masked')
+
+Export.image.toDrive({
+    image: maskedChange.eq(18).selfMask(),
+    description: 'ChangeDetection2007_2020Niger',
+    region: geometry,
+    scale: 25,
+    maxPixels: 1e13 
+  });
+  
+  var nstudy = nigeria.filterBounds(geometry)
+
+var k = maskedChange.sampleRegions({collection:nstudy, scale:25, tileScale:16, geometries:true})//reduceRegion(ee.Reducer.first(),feat.geometry(),25);
+print(k.first())
+
+
+Export.table.toDrive({
+  collection: k, 
+  description:'Nypa_GEDI_TDX_NoChange', 
+  // fileNamePrefix, 
+  fileFormat:'CSV'
+  })
