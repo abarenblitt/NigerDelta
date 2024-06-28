@@ -1,0 +1,557 @@
+//=====================================================================================================================
+//                                        NASA - University of Maryland (ESSIC)
+// Remote Sensing of Nypa Palm in the Niger Delta
+//
+// Project: Niger Delta Landcover Changes 
+// Code: Ghana NDVI Anomaly Classification and Random Forest Classification
+// Written by: Abigail Barenblitt, NASA Goddard and University of Maryland 
+// Co-authors: Lola Fatoyinbo, NASA Goddard; Celio de Sousa, UMBC
+// Objective: This code uses ALOS to classify areas within Nigeria's mangroves that have been converted to 
+// invasive Nypa Palm
+
+//=====================================================================================================================
+
+
+
+
+//*************************************************************
+//Set Up Map
+//*************************************************************
+Map.setCenter(8.0884, 4.7068, 9);   
+
+var GRAYMAP = [{
+    stylers: [ { saturation: -100 } ],},
+    { // Dial down the label darkness.
+    elementType: 'labels',
+    stylers: [ { lightness: 20 } ]
+  },{ // Simplify the road geometries.
+    featureType: 'road',
+    elementType: 'geometry',
+    stylers: [ { visibility: 'simplified' } ]
+  },{ // Turn off road labels.
+    featureType: 'road',
+    elementType: 'labels',
+    stylers: [ { visibility: 'off' } ]
+  },{ // Turn off all icons.
+    elementType: 'labels.icon',
+    stylers: [ { visibility: 'off' } ]
+  },{ // Turn off all POIs.
+    featureType: 'poi',
+    elementType: 'all',
+    stylers: [ { visibility: 'off' }]
+  }
+];
+Map.setOptions('Gray Map', {'Gray Map': GRAYMAP})//.setControlVisibility(false, false, false, false, false, false);
+
+
+//*************************************************************
+//Map Mangrove extent in 2019
+//*************************************************************
+// Set Area of Interest
+var Buffer = 1800; //@@@@@@@@@@@
+var index ='ndvi' ////@@@@@@ or 'evi'
+var version = 'V02_dl'//@@@@@@
+
+
+var Y1990 = ext1990
+
+
+  // Mangrove buffer area to determine areas of of change
+  // Change is assumed to occur within Buffer meters of GMW mangrove 
+  var Y1990 = ext1990
+
+
+// Map.addLayer(ext1990, {palette:['395CF8'], min:1, max:1}, 'Celio Extent 1990', false)
+
+var paletteMAP = [
+'#440154FF', // Purple, Nypa Palm(Class value 1)
+'#0000FF', // Dark Blue, Water (Class value 3) 
+'#29AF7FFF',//Light Green, Mangrove (Class value 5)
+
+];
+
+ 
+
+// ************************************************************************
+// ************************************************************************
+
+//             ALOS
+
+// ************************************************************************
+// ************************************************************************
+
+
+//*************************************************************
+//Pulling in ALOS Data
+//*************************************************************
+var dataset = alos.filter(ee.Filter.date('2007-01-01', '2007-12-31')).filterBounds(geometry);
+var sarHh = dataset.select('HH').median();
+var sarHv = dataset.select('HV').median();
+
+
+var compositeALOS = ee.Image.cat([sarHh,sarHv])//.focal_mean(SMOOTHING_RADIUS, 'circle', 'meters');
+
+
+var compositeLogALOS = compositeALOS.pow(2).log10().multiply(10).subtract(83)
+print(compositeLogALOS,'composite')
+
+// print(compositeLogALOS)
+var RVIALOS = compositeLogALOS.expression('(4*HV)/(HH+HV)',{
+          'HV':compositeLogALOS.select('HV'),
+          'HH':compositeLogALOS.select('HH')
+            }).rename('RVI');
+            
+var SRALOS = compositeLogALOS.select('HH').divide(compositeLogALOS.select('HV')).rename('SR');
+var compositeALOS2 = compositeLogALOS.addBands(RVIALOS).addBands(SRALOS)
+
+
+//////////////////////////////////////////////////////////
+//            2022                                  /////
+//////////////////////////////////////////////////////////
+
+var dataset2020 = alos.filter(ee.Filter.date('2020-01-01', '2020-12-31')).filterBounds(geometry);
+var sarHh2020 = dataset2020.select('HH').median();
+var sarHv2020 = dataset2020.select('HV').median();
+
+
+var compositeALOS2020 = ee.Image.cat([sarHh2020,sarHv2020])//.focal_mean(SMOOTHING_RADIUS, 'circle', 'meters');
+
+
+var compositeLogALOS2020 = compositeALOS2020.pow(2).log10().multiply(10).subtract(83)
+print(sarHh2020,'composite 2022')
+
+// print(compositeLogALOS)
+var RVIALOS2020 = compositeLogALOS2020.expression('(4*HV)/(HH+HV)',{
+          'HV':compositeLogALOS2020.select('HV'),
+          'HH':compositeLogALOS2020.select('HH')
+            }).rename('RVI');
+            
+var SRALOS2020 = compositeLogALOS2020.select('HH').divide(compositeLogALOS2020.select('HV')).rename('SR');
+
+var compositeALOS22020 = compositeLogALOS2020.addBands(RVIALOS2020).addBands(SRALOS2020)
+
+
+// Map.addLayer(compositeALOS2)
+// Export.image.toAsset({
+//     image: compositeALOS22020.updateMask(Y1990),
+//     description: 'ALOSDB_AddedBands_NigeriaCoast_2020',
+//     assetId:'projects/mangrovescience/NypaAnalysis/ALOS_NigerDelta/ALOSDB_AddedBands_NigeriaCoast_2020',
+//     region: studyArea,
+//     scale: 25,
+//     maxPixels: 1e13 
+//   });
+  
+// Export.image.toAsset({
+//     image: compositeALOS2.updateMask(Y1990),
+//     description: 'ALOSDB_AddedBands_NigeriaCoast_2007',
+//     assetId:'projects/mangrovescience/NypaAnalysis/ALOS_NigerDelta/ALOSDB_AddedBands_NigeriaCoast_2007',
+//     region: studyArea,
+//     scale: 25,
+//     maxPixels: 1e13 
+//   });
+
+// var compositeMaskALOS = compositeALOS2.updateMask(ext2019)
+// print(compositeMaskALOS,'composALOS')
+
+//*************************************************************
+// Assemble Random Forest Classification
+//*************************************************************
+
+//Assemble Training Classes
+var classes = Nypa
+              .merge(Water)
+              .merge(Mangrove)
+              
+print(tdxNigeria.reduceRegion({
+  reducer: ee.Reducer.min(),
+  geometry: Nypa.geometry(),
+  maxPixels: 1e9
+}));
+var histogram = ui.Chart.image.histogram(tdxNigeria, Nypa, 12);
+print(histogram)
+
+//*************************************************************
+// Assemble Random Forest Classification
+//*************************************************************
+
+var bandsALOS = ['HH','HV','SR','RVI']//Red Edge Bands
+
+//RF for 2020
+var samplesALOS = compositeALOS2.select(bandsALOS).sampleRegions({
+collection: classes, // Set of geometries selected in 4.1
+properties: ['landcover'], // Label from each geometry
+scale: 25 // Make each sample the same size as Landsat pixel
+})
+
+
+// print(accuracyTableALOS.first(),'acc')
+var runs = ee.List.sequence(1,1000,1)
+var RF4 = function(i){
+  //var num = ee.Number(i)
+  var classifierALOS = ee.Classifier.smileRandomForest(500,4).train({
+features: samplesALOS.select(['HH','HV','SR','RVI', 'landcover']),
+classProperty: 'landcover',
+inputProperties: bandsALOS
+});
+  var classified = compositeALOS2.clip(geometry).select(bandsALOS).classify(classifierALOS).select('classification').rename('Class')
+  // print(classified)
+  // print(classifierALOS.explain(),'explain')
+  return classified
+}
+
+var modelRun4 = runs.map(RF4)
+
+//View power of predictors in model
+var classifiedrfALOS = ee.ImageCollection(modelRun4).mode()
+// print(classifiedrfALOS)
+
+// //*************************************************************
+// // Clean Results
+// //*************************************************************
+
+
+//Clean up classification to eliminate small clusters of pixels
+// This reduces noise in the results to display areas that are likely mines rather 
+// than small disturbances or anomolies
+//-------------------------------------------------------------
+
+var cleanRFALOS = classifiedrfALOS.reduceNeighborhood({ //run classification through a neighborhood filter
+                reducer: ee.Reducer.mode(), //choose most common value in neighborhood
+                kernel: ee.Kernel.square(2,'pixels') //define neighborhood
+      });
+
+var pixelcountALOS = cleanRFALOS.connectedPixelCount(100, false); //Create an image that shows the number of pixels each pixel is connected to
+var countmaskALOS = pixelcountALOS.select(0).gt(25); //filter out all pixels connected to 4 or less 
+var final_RFALOS = cleanRFALOS.updateMask(countmaskALOS); //mask classfication image to exclude small patches
+
+
+
+//*************************************************************
+// Vizualize Results
+//*************************************************************
+
+
+var classSARALOS = final_RFALOS.clip(Y1990)//.updateMask(classMaskSAR)
+Map.addLayer(compositeALOS2.clip(Y1990).clip(geometry), {min: [-10,-16,-0.1], max: [-5,1,.1], bands: ['HH', 'HV','SR']}, 'ALOS2007', true);
+
+ 
+Map.addLayer (class2007, {min: 1, max: 5, palette:paletteMAP}, 'Classification ALOS 2007',false);
+
+
+var tdxMask = tdxNigeria.select(0).lt(15)//.selfMask()
+var tdxMask2 = tdxNigeria.select(0).gt(0)//.selfMask()
+
+var tdxnew = tdxNigeria.updateMask(tdxMask).updateMask(tdxMask2).selfMask().updateMask(ext1990UnBuff)
+print(tdxnew)
+Map.addLayer(tdxnew,{},'TDXMask',false)
+Map.addLayer(tdxNigeria,{},'TDXFull',false)
+
+// // *************************************************************
+// // Calculate Accuracy
+// // *************************************************************
+
+// var testing4 = alosOut.sampleRegions({
+//                   collection: valid,
+//                   properties:['UserClass'],
+//                   scale:6.25,
+//           });
+          
+// print(testing4)
+
+// // Classify the validation data.
+// var testAccuracy4 = testing4.errorMatrix('Class_mode','UserClass',[1,4,5]);
+
+// print('ALOS Validation error matrix: ', testAccuracy4); //Generates the error matrix to demonstrate accuracy by landcover class type
+// print('ALOS Validation overall accuracySAR: ', testAccuracy4.accuracy());
+
+//*************************************************************
+// Assemble Random Forest Classification
+//*************************************************************
+
+//Assemble Training Classes
+var classes2020 = Nypa2022
+              .merge(Water2022)
+              .merge(Mangrove2022)
+              
+print(tdxNigeria.reduceRegion({
+  reducer: ee.Reducer.min(),
+  geometry: Nypa2022.geometry(),
+  maxPixels: 1e9
+}));
+var histogram = ui.Chart.image.histogram(tdxNigeria, Nypa2022, 12);
+print(histogram)
+
+//*************************************************************
+// Assemble Random Forest Classification
+//*************************************************************
+
+var bandsALOS2020 = ['HH','HV','SR','RVI']//Red Edge Bands
+
+//RF for 2020
+var samplesALOS2020 = compositeALOS22020.select(bandsALOS2020).sampleRegions({
+collection: classes2020, // Set of geometries selected in 4.1
+properties: ['landcover'], // Label from each geometry
+scale: 25 // Make each sample the same size as Landsat pixel
+})
+
+
+// print(accuracyTableALOS.first(),'acc')
+var runs2020 = ee.List.sequence(1,1000,1)
+var RF42020 = function(i){
+  //var num = ee.Number(i)
+  var classifierALOS2020 = ee.Classifier.smileRandomForest(500,4).train({
+features: samplesALOS2020.select(['HH','HV','SR','RVI', 'landcover']),
+classProperty: 'landcover',
+inputProperties: bandsALOS2020
+});
+  var classified2020 = compositeALOS22020.clip(geometry).select(bandsALOS2020).classify(classifierALOS2020).select('classification').rename('Class')
+  // print(classified)
+  // print(classifierALOS.explain(),'explain')
+  return classified2020
+}
+
+var modelRun42020 = runs2020.map(RF42020)
+
+//View power of predictors in model
+var classifiedrfALOS2020 = ee.ImageCollection(modelRun42020).mode()
+// print(classifiedrfALOS)
+
+// //*************************************************************
+// // Clean Results
+// //*************************************************************
+
+
+//Clean up classification to eliminate small clusters of pixels
+// This reduces noise in the results to display areas that are likely mines rather 
+// than small disturbances or anomolies
+//-------------------------------------------------------------
+
+var cleanRFALOS2020 = classifiedrfALOS2020.reduceNeighborhood({ //run classification through a neighborhood filter
+                reducer: ee.Reducer.mode(), //choose most common value in neighborhood
+                kernel: ee.Kernel.square(2,'pixels') //define neighborhood
+      });
+
+var pixelcountALOS2020 = cleanRFALOS2020.connectedPixelCount(100, false); //Create an image that shows the number of pixels each pixel is connected to
+var countmaskALOS2020 = pixelcountALOS2020.select(0).gt(25); //filter out all pixels connected to 4 or less 
+var final_RFALOS2020 = cleanRFALOS2020.updateMask(countmaskALOS2020); //mask classfication image to exclude small patches
+
+
+
+//*************************************************************
+// Vizualize Results
+//*************************************************************
+
+
+var classSARALOS2020 = final_RFALOS2020.clip(Y1990)//.updateMask(classMaskSAR)
+Map.addLayer(compositeALOS22020.clip(Y1990).clip(geometry), {min: [-10,-16,-0.1], max: [-5,1,.1], bands: ['HH', 'HV','SR']}, 'ALOS2020', true);
+
+ 
+// Map.addLayer (classSARALOS2020, {min: 1, max: 5, palette:paletteMAP}, 'Classification ALOS 2020',false);
+Map.addLayer (class2020, {min: 1, max: 5, palette:paletteMAP}, 'Classification ALOS 2020',false);
+
+
+
+Map.addLayer (classSAR, {min: 1, max: 5, palette:paletteMAP}, 'SAR Classification ALOS 2020',false);
+
+
+// //*************************************************************
+// // Assemble Exports
+// //*************************************************************
+
+// //Export Final Classification to Asset
+  
+Export.image.toAsset({
+    image: classSARALOS,//.clip(studyArea),
+    description: 'Classified_ALOS_2007_Subset',
+    assetId:'projects/mangrovescience/NypaAnalysis/ALOS_NigerDelta/Classified_ALOS_2007_Subset',
+    region: ext1990UnBuff,
+    scale: 25,
+    maxPixels: 1e13 
+  });
+  
+Export.image.toAsset({
+    image: classSARALOS2020,//.clip(studyArea),
+    description: 'Classified_ALOS_2020_Subset',
+    assetId:'projects/mangrovescience/NypaAnalysis/ALOS_NigerDelta/Classified_ALOS_2020_Subset',
+    region: ext1990UnBuff,
+    scale: 25,
+    maxPixels: 1e13 
+  });
+  
+  
+// Export.image.toAsset({
+//     image: compositeALOS2.clip(Y2019).clip(studyArea),
+//     description: 'ALOSComposite2007',
+//     region: studyArea,
+//     scale: 25,
+//     maxPixels: 1e13 
+//   });
+
+
+// Export.image.toAsset({
+//     image: compositeALOS22022.clip(Y2019).clip(studyArea),
+//     description: 'ALOSComposite2020',
+//     region: studyArea,
+//     scale: 25,
+//     maxPixels: 1e13 
+//   });
+// //Export Stratified Random Poiints
+// Export.table.toAsset({
+//   collection: valid,
+//   description:'2020FullValidApril2021'
+// });
+
+// //Export Stratified Random Poiints
+// Export.table.toAsset({
+//   collection: ee.FeatureCollection(studyArea),
+//   description:'NypaStudyAreaFitted',
+//   // fileFormat: 'SHP',
+// }); 
+
+print('Valid n =', samplesALOS.aggregate_count('.all'));
+print('Valid n Nypa =', samplesALOS2020.filterMetadata('landcover', 'equals', 1).aggregate_count('.all'));
+print('Valid n Water=', samplesALOS.filterMetadata('landcover', 'equals', 4).aggregate_count('.all'));
+print('Valid n Mangrove=', samplesALOS.filterMetadata('landcover', 'equals', 5).aggregate_count('.all'));
+
+
+
+
+
+var final_Nypa = class2007.select(0).eq(1).selfMask(); 
+var final_Water = class2007.select(0).eq(4).selfMask();
+var final_Mangrove = class2007.select(0).eq(5).selfMask();
+
+var total = ee.Number(class2007.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: geometry,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(total, 'Total StudyArea in Hectares')
+  
+
+var nypaTotal = ee.Number(final_Nypa.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: geometry,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(nypaTotal, 'Total Nypa in Hectares 2007')
+
+
+var waterTotal = ee.Number(final_Water.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: geometry,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(waterTotal, 'Total Water in Hectares 2007')
+
+var mangroveTotal = ee.Number(final_Mangrove.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: geometry,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(mangroveTotal, 'Total Mangrove in Hectares 2007')
+
+// var class2020=classSARALOS2020
+
+var final_Nypa2020 = class2020.select(0).eq(1).selfMask(); 
+var final_Water2020 = class2020.select(0).eq(4).selfMask();
+var final_Mangrove2020 = class2020.select(0).eq(5).selfMask();
+
+
+var nypaTotal2020 = ee.Number(final_Nypa2020.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: geometry,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(nypaTotal2020, 'Total Nypa in Hectares 2020')
+
+
+var waterTotal2020 = ee.Number(final_Water2020.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: geometry,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(waterTotal2020, 'Total Water in Hectares 2020')
+
+var mangroveTotal2020 = ee.Number(final_Mangrove2020.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: geometry,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(mangroveTotal2020, 'Total Mangrove in Hectares 2020')
+
+
+
+
+//Creating Stratified Random Samples
+//----------------------------------
+var stratSamples = class2020.stratifiedSample({
+                      numPoints:500,
+                      classBand: 'Class_mode',
+                      region:geometry,
+                      scale: 25,
+                      geometries:true
+        });
+
+
+//Add a 15m Radius buffer around each point
+//-----------------------------------------
+var stratBuff = function(feature) {
+        var num = feature.get('Class_mode');
+            
+        return feature.buffer(12.5).set('Class_mode', num);
+        };
+
+
+//Map the buffer across all points (see export code below in Step 6)
+//--------------------------------------------------------
+var stratPoints = stratSamples.map(stratBuff)
+
+// Define a Point object.
+print(stratPoints)
+
+Export.table.toDrive({
+  collection: stratPoints,
+  description:'StratifiedrandomPointsNypa_2020',
+  fileFormat: 'SHP',
+});
+
+//ACCURACY ASSESSMENT
+//////////////////////////////////////////////////////
+var training2 = class2020.sampleRegions({
+                  collection: accPoints,
+                  properties:['Class_Chec'],
+                  scale:25,
+          });
+print(training2)
+
+var testAccuracy = training2.errorMatrix('Class_mode','Class_Chec',[0,1,2,3,4,5,6]);
+
+print('Validation error matrix: ', testAccuracy); //Generates the error matrix to demonstrate accuracy by landcover class type
+print('Validation overall accuracy: ', testAccuracy.accuracy());
+
+
+//*****************************************************************************
+//                      End Code
+//*****************************************************************************
