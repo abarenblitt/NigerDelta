@@ -1,0 +1,567 @@
+//=====================================================================================================================
+//                                        NASA - University of Maryland (ESSIC)
+// Remote Sensing of Oil Spill-related Loss in the Niger Delta
+//
+// Project: Niger Delta Landcover Changes 
+// Code: Classification of Loss Drivers with Focus on Oil Spills
+// Written by: Abigail Barenblitt, NASA Goddard and University of Maryland 
+// Co-authors: Lola Fatoyinbo, NASA Goddard; Celio de Sousa, UMBC
+// Objective: This code uses Random Forest to classify areas of anomalous NDVI loss as Oil, Erosion, Urban, or Other. The code is run 
+//a single epoch at a time, so Landsat 7 or Landsat 8 can be used as the input and must be commented in or out for each given epoch
+
+//=====================================================================================================================
+Map.setCenter(6.7506, 4.5097,9);
+
+// set basemap style to gray or dark 
+var GRAYMAP = [{
+    stylers: [ { saturation: -100 } ],},
+    { // Dial down the label darkness.
+    elementType: 'labels',
+    stylers: [ { lightness: 20 } ]
+  },{ // Simplify the road geometries.
+    featureType: 'road',
+    elementType: 'geometry',
+    stylers: [ { visibility: 'simplified' } ]
+  },{ // Turn off road labels.
+    featureType: 'road',
+    elementType: 'labels',
+    stylers: [ { visibility: 'off' } ]
+  },{ // Turn off all icons.
+    elementType: 'labels.icon',
+    stylers: [ { visibility: 'off' } ]
+  },{ // Turn off all POIs.
+    featureType: 'poi',
+    elementType: 'all',
+    stylers: [ { visibility: 'off' }]
+  }
+];
+Map.setOptions('Gray Map', {'Gray Map': GRAYMAP})//.setControlVisibility(false, false, false, false, false, false);
+
+
+
+// Create a list of regions that you want to export over. 
+// Add a "name" property to each region so that each export has a different assetId and description. 
+var region = coast
+
+
+Map.addLayer(oilDelim,{},'OilLossDelim',false)
+
+
+
+// **************** FUNCTIONS NEEDED ****************************************************
+
+//                    ==========================
+//                        LANDSAT FUNCTIONS
+//                    ==========================
+// // **************** DEFINE REFERENCE PERIOD COLLECTION ****************************************************
+
+
+    // var series_start = '1990-01-01'; //@@@@@@
+    //   var series_end =  '1995-12-31'; //@@@@@@
+    
+      // var series_start = '1994-01-01'; //@@@@@@
+      // var series_end =  '1999-12-31'; //@@@@@@
+      
+    // var series_start = '2000-01-01'; //@@@@@@
+    //   var series_end =  '2004-12-31'; //@@@@@@
+    
+      // var series_start = '2005-01-01'; //@@@@@@
+      // var series_end =  '2009-12-31'; //@@@@@@
+      
+    // var series_start = '2010-01-01'; //@@@@@@
+    //   var series_end =  '2014-12-31'; //@@@@@@
+
+    // var series_start = '2015-01-01'; //@@@@@@
+    //   var series_end =  '2020-12-31'; //@@@@@@
+    
+    var series_start = '2021-01-01'; //@@@@@@
+      var series_end =  '2023-02-28'; //@@@@@@
+      
+    // var series_start = '1980-01-01'; //@@@@@@
+    //   var series_end =  '2000-12-31'; //@@@@@@
+     
+// Define function to get and rename bands of interest from OLI.
+function renameOLI(img) {
+  return img.select(
+		['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7', 'QA_PIXEL', 'QA_RADSAT'],
+		['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2', 'QA_PIXEL', 'QA_RADSAT']
+	);
+}
+
+function renameETM(img) {
+  return img.select(
+		['SR_B1', 'SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B7', 'QA_PIXEL', 'QA_RADSAT'],
+		['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2', 'QA_PIXEL', 'QA_RADSAT']
+  );
+}
+
+
+// Define function to mask out clouds and cloud shadows.
+function maskLSR(image) {
+  // Bit 0 - Fill
+  // Bit 1 - Dilated Cloud
+  // Bit 2 - Unused
+  // Bit 3 - Cloud
+  // Bit 4 - Cloud Shadow
+  var qaMask = image.select('QA_PIXEL').bitwiseAnd(parseInt('11111', 2)).eq(0);
+  var saturationMask = image.select('QA_RADSAT').eq(0);
+
+  // Apply the scaling factors to the appropriate bands.
+  var opticalBands = image.select(['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2']).multiply(0.0000275).add(-0.2);
+  //var thermalBand = image.select('ST').multiply(0.00341802).add(149.0); //removed .0
+
+  // Replace the original bands with the scaled ones and apply the masks.
+  return image.addBands(opticalBands, null, true)
+      //.addBands(thermalBand, null, true)
+      .updateMask(qaMask)
+      .updateMask(saturationMask);
+}
+
+// Harmonize Landsat - Roy et al. (2016) coefficients for translating ETM+ SR to OLI SR
+var coefficients = {
+  itcps: ee.Image.constant([0.0003, 0.0088, 0.0061, 0.0412, 0.0254, 0.0172]),//.multiply(10000),
+  slopes: ee.Image.constant([0.8474, 0.8483, 0.9047, 0.8462, 0.8937, 0.9071]),//.multiply(10000)
+};
+
+// Define function to apply harmonization transformation.
+function etm2oli(img) {
+  return img.select(['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2'])
+    .multiply(coefficients.slopes)
+    .add(coefficients.itcps)
+    // .round()
+    // .toShort()
+    .addBands(img.select('QA_PIXEL', 'QA_RADSAT')
+  );
+}
+
+// Define function to prepare OLI images.
+function prepOLI(img) {
+  var orig = img;
+  img = renameOLI(img);
+  img = maskLSR(img);
+  return ee.Image(img.copyProperties(orig, orig.propertyNames()));
+}
+
+// Define function to prepare ETM+ images.
+function prepETM(img) {
+  var orig = img;
+  img = renameETM(img);
+  img = maskLSR(img);
+  img = etm2oli(img);
+  return ee.Image(img.copyProperties(orig, orig.propertyNames()));
+}
+
+
+
+// //////////////////////////////////////////////
+// // Sentinel Collection Prep Functions
+
+// function renameMSI(img) {
+//   return img.select(
+// 		['B2','B3','B4','B8','B11','B12','QA60'],
+// 		['Blue', 'Green', 'Red', 'NIR', 'SWIR1', 'SWIR2', 'QA60']
+// 	);
+// }
+
+// // A function to mask clouds in Sentinel-2 
+// function maskS2clouds(image) {
+//   var qa = image.select('QA60');
+//   // Bits 10 and 11 are clouds and cirrus, respectively.
+//   var cloudBitMask = 1 << 10;
+//   var cirrusBitMask = 1 << 11;
+//   // Both flags should be set to zero, indicating clear conditions.
+//   var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+//       .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+//   return image.updateMask(mask).divide(10000);
+// }
+
+
+//////////////////////////////////////////////
+// Shared Functions (masking, indices)
+
+// This function maps spectral indices for Mangrove Mapping using Landsat 7 Imagery
+var addIndices = function(img) {
+  // NDVI
+  var ndvi = img.normalizedDifference(['NIR','Red']).rename('NDVI');
+  // NDMI (Normalized Difference Mangrove Index - Shi et al 2016 - New spectral metrics for mangrove forest identification)
+  var ndmi = img.normalizedDifference(['SWIR2','Green']).rename('NDMI');
+  // MNDWI (Modified Normalized Difference Water Index - Hanqiu Xu, 2006)
+  var mndwi = img.normalizedDifference(['Green','SWIR1']).rename('MNDWI');
+  // SR (Simple Ratio)
+  var sr = img.select('NIR').divide(img.select('Red')).rename('SR');
+  // // Band Ratio 54
+  // var ratio54 = img.select('SWIR1').divide(img.select('NIR')).rename('R54');
+  // // Band Ratio 35
+  // var ratio35 = img.select('Red').divide(img.select('SWIR1')).rename('R35');
+  // GCVI
+  var gcvi = img.expression('(NIR/GREEN)-1',{
+    'NIR':img.select('NIR'),
+    'GREEN':img.select('Green')
+  }).rename('GCVI');
+  return img
+    .addBands(ndvi)
+    .addBands(ndmi)
+    .addBands(mndwi)
+    .addBands(sr)
+    // .addBands(ratio54)
+    // .addBands(ratio35)
+    .addBands(gcvi);
+};
+
+//Landsat 5
+var L5 = ee.ImageCollection("LANDSAT/LT05/C02/T1_L2")
+                // .filter(colFilter)
+                .filterBounds(region)
+                .filterDate(series_start,series_end)
+                .map(prepETM)
+                .map(addIndices)
+                .median();
+
+
+// Landsat 7
+var L7 = ee.ImageCollection("LANDSAT/LE07/C02/T1_L2")
+                // .filter(colFilter)
+                .filterBounds(region)
+                .filterDate(series_start,series_end)
+                .map(prepETM)
+                .map(addIndices)
+                .median();
+                
+
+//Landsat 8
+var L8 =ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                // .filter(colFilter)
+                .filterBounds(region)
+                .filterDate(series_start,series_end)
+                .map(prepOLI)
+                .map(addIndices)
+                .median();
+                
+                print(L8)
+
+var visFC = {bands:['NIR','SWIR1','Red'], min: 0, max: 0.25};
+
+Map.addLayer(L7, visFC, 'Landsat Composite 1995-2000', true) ;
+
+Map.addLayer(anom20_only.selfMask(),{palette:"red", opacity:1},"Anomaly 1995")
+
+
+// // ///////////////////////////////////////////////////////////////
+// // //                    4) Create Training Data                //
+// // ///////////////////////////////////////////////////////////////
+
+// //4.1) Merge class sample
+// ////////////////////////////
+
+// This function computes the feature's geometry area and adds it as a property.
+var oilFunc = function(feature) {
+  return feature.set({landcover: 1});
+};
+
+// Map the area getting function over the FeatureCollection.
+var strFun = function(num){
+  var fl = ee.String(num.get('year'))
+  return num.set('year',fl)
+}
+
+var oilUpdate = oilUpdate.map(strFun)
+
+var oilSpills = oilUpdate.filter(ee.Filter.rangeContains('year','2005','2009')).aside(Map.addLayer,{color:'blue'},'2005 Spills', false)
+
+var oilTrain = oilSpills.map(oilFunc).select('landcover')//.filterBounds(vectors95)
+
+var random = oilTrain.randomColumn('random'); // creates a column with random numbers
+Export.table.toAsset({collection:random,description: "Nigeria_Oil/OilPointTraining2023"})
+
+// var split = 0.22; // Roughly 80% for training, 20% for testing.
+// var training = train10.filter(ee.Filter.lt('random', split));
+// var testing = train10.filter(ee.Filter.gte('random', split));
+// print(training.size())
+// print(training,'train')
+// Export.table.toAsset({collection:training.select('landcover'),description:'Training'})
+
+
+
+
+// var classes = Oil2023.merge(train23).merge(Erosion2023).merge(Urban2023).merge(Other2023);
+// var classes = Oil2015.merge(train15).merge(Erosion2015).merge(Urban2015).merge(Other2015);
+// var classes = Oil2010.merge(train10).merge(Erosion2010).merge(Urban2010).merge(Other2010);
+// var classes = Oil2005.merge(train05).merge(Erosion2005).merge(Urban2005).merge(Other2005);
+// var classes = Erosion2000.merge(Urban2000).merge(Other2000);
+var classes = Erosion1995.merge(Urban1995).merge(Other1995);
+
+// // //4.2) Select bands used for training the model
+// // ///////////////////////////////////////////////
+var bands = ['Blue', 'Green', 'Red', 'NIR', 'SWIR2']
+
+// // //4.3) Sample Landsat pixels using the geometries we created
+// // /////////////////////////////////////////////////////////////
+
+var samples = L7.select(bands).sampleRegions({
+collection: classes, // Set of geometries selected in 4.1
+properties: ['landcover'], // Label from each geometry
+scale: 30 // Make each sample the same size as Landsat pixel
+}).randomColumn('random'); // creates a column with random numbers
+
+
+// // //4.5) Inspect size of samples, training, and testing objects
+// // /////////////////////////////////////////////////////////////
+
+print('Samples n =', samples.aggregate_count('.all'));
+print('Valid n Oil =', samples.filterMetadata('landcover', 'equals', 1).aggregate_count('.all'));
+print('Valid n Erosion=', samples.filterMetadata('landcover', 'equals', 2).aggregate_count('.all'));
+print('Valid n Urban=', samples.filterMetadata('landcover', 'equals', 3).aggregate_count('.all'));
+
+
+// // ///////////////////////////////////////////////////////////////
+// // //                    5) Train Classifier                   //
+// // ///////////////////////////////////////////////////////////////
+
+
+// // //5.1) Now train the classifier
+// // //////////////////////////////////
+
+var classifier = ee.Classifier.smileRandomForest(100,5).train({
+features: samples.select(['Blue', 'Green', 'Red', 'NIR', 'SWIR2', 'landcover']),
+classProperty: 'landcover',
+inputProperties: bands
+});
+
+
+// // //5.3) Classify the Landsat Composite
+// // //////////////////////////////////////
+
+var classRF = L7.updateMask(anom95_only).select(bands) // select the predictors
+.classify(classifier); // apply the Random Forest
+
+print(classifier.explain())
+
+// //Clean up classification to eliminate small clusters of pixels
+// // This reduces noise in the results to display areas that are likely mines rather 
+// // than small disturbances or anomolies
+// //-------------------------------------------------------------
+var cleanRF = classRF.reduceNeighborhood({ //run classification through a neighborhood filter
+                reducer: ee.Reducer.mode(), //choose most common value in neighborhood
+                kernel: ee.Kernel.square(2,'pixels') //define neighborhood
+      });
+
+var pixelcount = cleanRF.connectedPixelCount(100, false); //Create an image that shows the number of pixels each pixel is connected to
+var countmask = pixelcount.select(0).gt(25); //filter out all pixels connected to 4 or less 
+var final_RF = cleanRF.updateMask(countmask) //mask classfication image to exclude small patches
+// var final_RF2 = final_RF//.select(0).gt(0)
+
+var oil = cleanRF.select(0).eq(1)
+
+var palette = [
+  'yellow',//yellow - oil (1)
+  'red',//red - erosion (2)
+  'blue',//blue - urban (3)
+  'green'
+];
+
+Map.addLayer(final_RF,{min:1,max:4,palette: palette},'Final RF Classification 2021-2023');
+
+
+// Map.addLayer(final_RF2.select(0),{palette: ['#c400c4']}, '2015-2020 Loss from Oil Spills');
+// Map.addLayer(class2010.select(0),imageVisParam, '2010-2015 Loss from Oil Spills', false);
+// Map.addLayer(class2005.select(0).eq(1),{palette: ['blue']}, '2005-2010 Loss from Oil Spills', false);
+
+
+
+Export.image.toAsset({
+image: classRF, // Image you want to export
+description: 'ClassificationOutput1995-2000_Oct23', // Name showing on the task list (no space)
+assetId: 'Nigeria_Oil/AnomalyLayers_2023/ClassificationLoss1995-2000_Nov23_NC', // Asset name (No spaces allowed)
+scale: 30, // Scale (30m Landsat)
+region: region, // Region
+maxPixels:1e13 // Default: if the export exceeds 1e8 = error!
+});
+
+// // //Oil results only
+// // //---------------------
+Map.addLayer(oil,{palette: 'yellow'},'Loss from Oil 2005-2010', false);
+
+// // var allSpills2015_2021=oilUpdate.filter(ee.Filter.rangeContains('year','2015','2021'))
+// // .aside(Map.addLayer, {color:'B57EDC'}, 'All Spills 2015-2021',false)
+
+
+// // // class2015.select(0).eq(1)
+// // // class2010.select(0).eq(1)
+// // // class2005.select(0).eq(1)
+
+// print(class2020clean,'class')
+
+var area2020 = states.map(function(feature){ 
+
+  var area = class2020.select(0).eq(1).selfMask().multiply(ee.Image.pixelArea()).divide(10000).reduceRegion({
+      reducer:ee.Reducer.sum(),
+      geometry:feature.geometry(100),
+      scale: 30,
+      maxPixels:1e13
+      }).get('classification');
+        
+    
+  return feature.set("OilLossRFC_Area2021-2023", area);
+})
+
+var areaNipa = area2020.map(function(feature){ 
+
+  var area = class2015.select(0).eq(1).selfMask().multiply(ee.Image.pixelArea()).divide(10000).reduceRegion({
+      reducer:ee.Reducer.sum(),
+      geometry:feature.geometry(100),
+      scale: 30,
+      maxPixels:1e13
+      }).get('classification');
+        
+    
+  return feature.set("OilLossRFC_Area2015-2020", area);
+})
+
+var area2010 = areaNipa.map(function(feature){ 
+
+  var area = class2010.select(0).eq(1).selfMask().multiply(ee.Image.pixelArea()).divide(10000).reduceRegion({
+      reducer:ee.Reducer.sum(),
+      geometry:feature.geometry(100),
+      scale: 30,
+      maxPixels:1e13
+      }).get('classification');
+        
+    
+  return feature.set("OilLossRFC_Area2010-2015", area);
+})
+
+var area2005 = area2010.map(function(feature){ 
+
+  var area = class2005.select(0).eq(1).selfMask().multiply(ee.Image.pixelArea()).divide(10000).reduceRegion({
+      reducer:ee.Reducer.sum(),
+      geometry:feature.geometry(100),
+      scale: 30,
+      maxPixels:1e13
+      }).get('classification');
+        
+    
+  return feature.set("OilLossRFC_Area2005-2010", area);
+})
+
+
+Export.table.toDrive({
+  collection:area2005,
+  folder:'WorkGeneral/NigerDeltaChanges',
+  description:'OilLossAreaStateRFCAug2023'})
+  
+//   // =======================================================================================
+// // STEP 4: Create random points for export for accuracy assessment in QGIS
+// // =======================================================================================
+
+// //These points were created in GEE using Stratified Random Sampling (see below)
+// //We then used the Class Accuracy plug-in (Pete Bunting) to classify each point using
+// //WorldView data as validation
+
+// //Creating Stratified Random Samples
+// //----------------------------------
+// var stratSamples = class2015.stratifiedSample({
+//                       numPoints:400,
+//                       classBand: 'classification',
+//                       region:region,
+//                       scale: 30,
+//                       geometries:true
+//         });
+
+
+// //Add a 15m Radius buffer around each point
+// //-----------------------------------------
+// var stratBuff = function(feature) {
+//         var num = feature.get('classification_mode');
+            
+//         return feature.buffer(15).set('classification_mode', num);
+//         };
+ 
+
+// //Map the buffer across all points (see export code below in Step 6)
+// //--------------------------------------------------------
+// var stratPoints = stratSamples.map(stratBuff)
+
+// Export.table.toDrive({
+//   collection: stratPoints,
+//   description:'StratifiedrandomPoints_NigerOil',
+//   fileFormat: 'SHP',
+// }); 
+
+// Export.image.toAsset({
+//   image: anom95Mb.updateMask(anomFull),
+//   description: 'NigeriaTotalLoss1995_2000Aug23_05Thresh',
+//   region: coast,
+//   scale: 30,
+//   maxPixels: 1e13
+//   }); 
+  
+// Export.image.toAsset({
+//   image: anom00_only,
+//   description: 'NigeriaTotalLoss2000_2005Aug23_05Thresh',
+//   region: coast,
+//   scale: 30,
+//   maxPixels: 1e13
+//   }); 
+  
+// Export.image.toAsset({
+//   image: anom05_only,
+//   description: 'NigeriaTotalLoss2005_2010Aug23_05Thresh',
+//   region: coast,
+//   scale: 30,
+//   maxPixels: 1e13
+//   }); 
+  
+// Export.image.toAsset({
+//   image: anom10_only,
+//   description: 'NigeriaTotalLoss2010_2015Aug23_05Thresh',
+//   region: coast,
+//   scale: 30,
+//   maxPixels: 1e13
+//   }); 
+  
+// Export.image.toAsset({
+//   image: anom15_only,
+//   description: 'NigeriaTotalLoss2015_2021Aug23_05Thresh',
+//   region: coast,
+//   scale: 30,
+//   maxPixels: 1e13
+//   }); 
+  
+// Export.image.toAsset({
+//   image: anom20_only,
+//   description: 'NigeriaTotalLoss2021_2023Aug23_05Thresh',
+//   region: coast,
+//   scale: 30,
+//   maxPixels: 1e13
+//   }); 
+  
+// Export.image.toAsset({
+//   image: anomFullNew,
+//   description: 'NigeriaTotalLoss1995_2023Aug23_05Thresh',
+//   region: coast,
+//   scale: 30,
+//   maxPixels: 1e13
+//   }); 
+
+var loss_95_00 = anom95_only.updateMask(L7.select(0)).selfMask().multiply(ee.Image.pixelArea().divide(10000));
+//Calculate the area of loss pixels in Nigeria
+  var stats = loss_95_00.reduceRegion({
+    reducer: ee.Reducer.sum(),
+   // geometry: anomFullM,
+    scale: 30, 
+    maxPixels:1e9
+  });
+  print(
+    'Anom Loss in Nigeria from 1995-2000', stats.get('ndvi'), 
+    'hectares');
+    
+Export.image.toAsset({
+  image: L8.select(0),
+  description:'CloudMask2021',
+  assetId: 'Nigeria_Oil/AnomalyLayers_2023/CloudMasks/2021_CloudMask',
+  region: region,
+  scale: 30,
+  maxPixels: 1e13
+  }); 
+  
+  Map.addLayer(L8.select(0))
