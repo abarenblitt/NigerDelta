@@ -1,0 +1,462 @@
+//=====================================================================================================================
+//                                        NASA - University of Maryland (ESSIC)
+// Remote Sensing of Oil Spill-related Loss in the Niger Delta
+//
+// Project: Niger Delta Landcover Changes 
+// Code: Anomolous Loss Code
+// Written by: Abigail Barenblitt, NASA Goddard and University of Maryland 
+// Co-authors: Lola Fatoyinbo, NASA Goddard; Celio de Sousa, UMBC
+// Objective: This code examines NDVI anomalous loss in Nigerian mangroves over 5 year epochs from 1995-2020
+
+//=====================================================================================================================
+//=======================================================================================
+//Set Up Map 
+//=======================================================================================
+
+
+// Create a list of regions that you want to export over. 
+// Add a "name" property to each region so that each export has a different assetId and description. 
+var regions = coast
+var mangrove = mang.select('constant').eq(1)
+// Map.addLayer(mangrove)
+
+Map.centerObject(regions,7)
+
+// set basemap style to gray or dark 
+var GRAYMAP = [{
+    stylers: [ { saturation: -100 } ],},
+    { // Dial down the label darkness.
+    elementType: 'labels',
+    stylers: [ { lightness: 20 } ]
+  },{ // Simplify the road geometries.
+    featureType: 'road',
+    elementType: 'geometry',
+    stylers: [ { visibility: 'simplified' } ]
+  },{ // Turn off road labels.
+    featureType: 'road',
+    elementType: 'labels',
+    stylers: [ { visibility: 'off' } ]
+  },{ // Turn off all icons.
+    elementType: 'labels.icon',
+    stylers: [ { visibility: 'off' } ]
+  },{ // Turn off all POIs.
+    featureType: 'poi',
+    elementType: 'all',
+    stylers: [ { visibility: 'off' }]
+  }
+];
+Map.setOptions('Gray Map', {'Gray Map': GRAYMAP})//.setControlVisibility(false, false, false, false, false, false);
+
+
+// Map.addLayer(image)
+// Map.addLayer(coast)
+ 
+
+
+// Set Area of Interest
+var Buffer = 1800; //@@@@@@@@@@@
+var index ='ndvi' ////@@@@@@ or 'evi'
+var version = 'V02_dl'//@@@@@@
+
+//=======================================================================================
+//Load Mangrove Layers and Create Buffer
+//=======================================================================================
+
+  var mangrove = mang
+
+    
+    Map.addLayer(mangrove,{palette:['green']},'1990 Mangrove Celio',false);
+
+  // Mangrove buffer area to determine areas of of change
+  // Change is assumed to occur within Buffer meters of GMW mangrove 
+  var mang_buffer = mangrove.focal_max(Buffer,'square','meters');
+    Map.addLayer(buff,{},'Mangrove Buffer',false)
+
+Export.image.toAsset({
+  image: mang_buffer,
+  description: 'Nigeria_Mangroves_1990_1800Buffer',
+  region: coast,
+  assetId:'Nigeria/Nigeria_Mangroves_1990_1800Buffer',
+  scale: 30,
+  maxPixels: 1e13
+  });
+
+//=======================================================================================
+//Landsat Preparation 
+//=======================================================================================
+
+
+// **************** FUNCTIONS NEEDED ****************************************************
+
+//                    ==========================
+//                        LANDSAT FUNCTIONS
+//                    ==========================
+
+// // define years and dates to include in landsat image collection
+var startYear = 1984;    //@@@@@@// what year do you want to start the time series 
+var endyear   = 2022;   //@@@@@@ // what year do you want to end the time series
+var startDay  = '01-01';//@@@@@@ // what is the beginning of date filter | month-day
+var endDay    = '12-31';//@@@@@@ // what is the end of date filter | month-day
+
+            // PULLED FROM LANDTRNDR SCRIPT - From GEE SUMMIT 2018
+            //****************************************************
+            //------ L8 to L7 HARMONIZATION FUNCTION -----
+            // slope and intercept citation: Roy, D.P., Kovalskyy, V., Zhang, H.K., Vermote, E.F., Yan, L., Kumar, S.S, Egorov, A., 2016, Characterization of Landsat-7 to Landsat-8 reflective wavelength and normalized difference vegetation index continuity, Remote Sensing of Environment, 185, 57-70.(http://dx.doi.org/10.1016/j.rse.2015.12.024); Table 2 - reduced major axis (RMA) regression coefficients
+            var harmonizationRoy = function(oli) {
+              var slopes = ee.Image.constant([0.9785, 0.9542, 0.9825, 1.0073, 1.0171, 0.9949]);        // create an image of slopes per band for L8 TO L7 regression line - David Roy
+              var itcp = ee.Image.constant([-0.0095, -0.0016, -0.0022, -0.0021, -0.0030, 0.0029]);     // create an image of y-intercepts per band for L8 TO L7 regression line - David Roy
+              var y = oli.select(['SR_B2','SR_B3','SR_B4','SR_B5','SR_B6','SR_B7'],['SR_B1', 'SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B7']) // select OLI bands 2-7 and rename them to match L7 band names
+                        .resample('bicubic')                                                          // ...resample the L8 bands using bicubic
+                        .subtract(itcp.multiply(10000)).divide(slopes)                                // ...multiply the y-intercept bands by 10000 to match the scale of the L7 bands then apply the line equation - subtract the intercept and divide by the slope
+                        .set('system:time_start', oli.get('system:time_start'));                      // ...set the output system:time_start metadata to the input image time_start otherwise it is null
+              return y.toShort();                                                                       // return the image as short to match the type of the other data
+            };
+            
+            //****************************************************
+            //------ RETRIEVE A SENSOR SR COLLECTION FUNCTION -----
+            var getSRcollection = function(year, startDay, endYear, endDay, sensor) {
+              // get a landsat collection for given year, day range, and sensor
+              var srCollection = ee.ImageCollection('LANDSAT/'+ sensor + '/C02/T1_L2') // get surface reflectance images
+                                  // .filterBounds(aoi)                                  // ...filter them by intersection with AOI
+                                  .filterDate(year+'-'+startDay, endYear+'-'+endDay);    // ...filter them by year and day range
+              
+              // apply the harmonization function to LC08 (if LC08), subset bands, unmask, and resample           
+              srCollection = srCollection.map(function(img) {
+                var dat = ee.Image(
+                  ee.Algorithms.If(
+                    sensor == 'LC08',                                                  // condition - if image is OLI
+                    harmonizationRoy(img.unmask()),                                    // true - then apply the L8 TO L7 alignment function after unmasking pixels that were previosuly masked (why/when are pixels masked)
+                    img.select(['SR_B1', 'SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B7'])                   // false - else select out the reflectance bands from the non-OLI image
+                      .unmask()                                                       // ...unmask any previously masked pixels 
+                      .resample('bicubic')                                            // ...resample by bicubic 
+                      .set('system:time_start', img.get('system:time_start'))         // ...set the output system:time_start metadata to the input image time_start otherwise it is null
+                  )
+                );
+                
+                // make a cloud, cloud shadow, and snow mask from fmask band
+                var qa = img.select('QA_PIXEL');                                       // select out the fmask band
+                var mask = qa.bitwiseAnd(8).eq(0).and(                                 // include shadow
+                          qa.bitwiseAnd(16).eq(0)).and(                               // include snow
+                          qa.bitwiseAnd(32).eq(0));                                   // include clouds
+                
+                // apply the mask to the image and return it
+                return dat.mask(mask); //apply the mask - 0's in mask will be excluded from computation and set to opacity=0 in display
+              });
+            
+              return srCollection; // return the prepared collection
+            };
+            
+            //****************************************************
+            //------ FUNCTION TO COMBINE LT05, LE07, & LC08 COLLECTIONS -----
+            var getCombinedSRcollection = function(year, startDay, endYear,endDay) {
+                var lt5 = getSRcollection(year, startDay, endYear, endDay, 'LT05');       // get TM collection for a given year, date range, and area
+                var le7 = getSRcollection(year, startDay, endYear, endDay, 'LE07');       // get ETM+ collection for a given year, date range, and area
+                var lc8 = getSRcollection(year, startDay, endYear, endDay, 'LC08');       // get OLI collection for a given year, date range, and area
+                var mergedCollection = ee.ImageCollection(le7.merge(lc8).merge(lt5)); // merge the individual sensor collections into one imageCollection object
+                return mergedCollection;                                              // return the Imagecollection
+            };
+            // ----- FULL LANDSAT COLLECTION
+            var collectionSR = getCombinedSRcollection(startYear, startDay,endyear,endDay)
+
+
+              //////////////////////////////////////////////////
+              //==============================
+              // VEGETATION INDICES FOR LANDSAT 5 and 7 
+              //==============================
+              //****************************************************
+              //------ FUNCTION TO ADD VEGETATION INDEX TO LT05, LE07, & LC08 COLLECTIONS -----
+                var addvars = function(image) {
+                  var ndvi = image.normalizedDifference(['SR_B4', 'SR_B3']).rename('ndvi')//.mask(MangroveMap).clip(aoi);
+                  var evi = image.expression(
+                  '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))', {
+                    'NIR': image.select('SR_B4'),
+                    'RED': image.select('SR_B3'),
+                    'BLUE': image.select('SR_B1')
+                  }).rename('evi')
+                  var savi = image.expression(
+                  '((NIR - RED) / (NIR + RED + 0.5) * (0.5 + 1))', {
+                    'NIR': image.select('SR_B4'),
+                    'RED': image.select('SR_B3'),
+                    'BLUE': image.select('SR_B1')
+                  }).rename('savi')
+                  var osavi = image.expression(
+                  '((NIR - RED) / (NIR + RED + 0.6))', {
+                    'NIR': image.select('SR_B4'),
+                    'RED': image.select('SR_B3'),
+                    'BLUE': image.select('SR_B1')
+                  }).rename('osavi')
+                  var satvi = image.expression(
+                  '((SWIR1 - RED) / (SWIR1 + RED + 0.5)*(1 + 0.6) - SWIR1 / 2)', {
+                    'SWIR1': image.select('SR_B5'),
+                    'RED': image.select('SR_B4'),
+                  }).rename('satvi')
+                  var ndwi = image.normalizedDifference(['SR_B5', 'SR_B4']).rename('ndwi')//.mask(MangroveMap).clip(aoi);
+                  var mndwi = image.normalizedDifference(['SR_B2','SR_B5']).rename('mndwi');
+
+              
+                  return image.addBands(ndvi)
+                              .addBands(evi)
+                              .addBands(savi)
+                              .addBands(osavi)
+                              .addBands(satvi)
+                              .addBands(ndwi)
+                              .addBands(mndwi)
+                              //.addBands(ee.Image(years).rename('t').float()).addBands(ee.Image.constant(1));
+                };
+      
+
+              //==============================
+              //  APPLY FUNCTIONS FOR VEGE INDICES
+                var collectionSR_wIndex = collectionSR.map(addvars)
+                  print(collectionSR_wIndex.size(),'Size of Landsat 5,7,8 collection')
+                  
+ 
+
+// **************** DEFINE REFERENCE PERIOD MEDIAN ****************************************************
+
+//// START of NDVI Change
+  // Merge all Landsat collections together
+  var collectionL5L7 = collectionSR_wIndex.filterBounds(regions)
+ 
+  // Define reference conditions from the first X number of years years of data.
+    var ref_start = '1984-01-01'; //@@@@@@
+    var ref_end =  '1994-12-31'; //@@@@@@
+  
+    var reference = collectionL5L7
+        .filterDate(ref_start, ref_end)
+        .select(index)
+        .sort('system:time_start', true);// Sort chronologically in descending order.
+        
+      print(reference.size(),'Number of images in Reference Collection');
+    print(reference,'ref') 
+    // Compute the mean NDVI for the Reference Period.
+      var mean = reference.median().mask(mang_buffer);
+      var max = reference.max().mask(mang_buffer);
+      
+        var referenceMask = mean.eq(0)// Mask of where reference still has clouds 
+      // Map.addLayer(water)
+      var refMNDWI = collectionL5L7
+        .filterDate(ref_start, ref_end)
+        .select('mndwi')
+        .sort('system:time_start', true)
+    var watMask = refMNDWI.median().select('mndwi').lt(0.30)
+
+      Map.addLayer(mean.updateMask(watMask),{min:-0.8,max:0.8},'Mean NDVI Reference',false);
+      Map.addLayer(referenceMask,{},'Reference Mask',false); // mask of reference data that still has clouds. 
+      
+   
+// // **************** DEFINE REFERENCE PERIOD COLLECTION ****************************************************
+
+
+    // var series_start = '1990-01-01'; //@@@@@@
+    //   var series_end =  '1995-12-31'; //@@@@@@
+    
+      // var series_start = '1995-01-01'; //@@@@@@
+      // var series_end =  '1999-12-31'; //@@@@@@
+      
+    // var series_start = '2000-01-01'; //@@@@@@
+    //   var series_end =  '2004-12-31'; //@@@@@@
+    
+      // var series_start = '2005-01-01'; //@@@@@@
+      // var series_end =  '2009-12-31'; //@@@@@@
+      
+    var series_start = '2010-01-01'; //@@@@@@
+      var series_end =  '2014-12-31'; //@@@@@@
+
+    // var series_start = '2015-01-01'; //@@@@@@
+    //   var series_end =  '2022-12-31'; //@@@@@@
+    
+    // var series_start = '1995-01-01'; //@@@@@@
+    //   var series_end =  '2022-12-31'; //@@@@@@
+      
+    // var series_start = '1980-01-01'; //@@@@@@
+    //   var series_end =  '2000-12-31'; //@@@@@@
+     
+      
+      
+//=======================================================================================
+//NDVI Anomaly Code 
+//=======================================================================================
+
+      //-------COMPUTE NDVI ANOMALY ----------
+      // Compute anomalies by subtracting the 1984-1995 mean from each image in a
+      // collection of 1996-2017 images. Copy the date metadata over to the
+      // computed anomaly images in the new collection.
+      var series = collectionL5L7.filterDate(series_start,series_end).map(function(image) {
+          return image.subtract(mean)//.mask(MDmarshes)
+                    .set('system:time_start', image.get('system:time_start'))
+      });
+      
+    // Get the timestamp from the most recent image in the reference collection.
+      var time0 = series.first().get('system:time_start');
+      print(ee.Date(time0), 'Beginning of Landsat Series')
+// // print(series,'series')
+// // **************** DEFINE MEDIAN FOR END OF PERIOD ****************************************************
+
+//       // ------- Deteremine mean NDVI for the end of the series -----------
+        // Mean of Last 2 years
+        var last = series.select(index).filterDate('2020-01-01','2022-12-31').median().mask(mang_buffer).rename('m')
+        // Max of Last 2 years
+        var lastmax = series.select(index).filterDate('2020-01-01','2022-12-31').max().mask(mang_buffer)
+// var watMask = series.median().select('ndwi').gt(0.13) 
+      print(series.filterDate(series_start,series_end).size(),"Number of images in Last Collection")
+      // Map.addLayer(lastmax,{min:-0.5,max:0.5},'Mean NDVI end of series',false)
+
+
+///////////////////////////////////////////////////////////////
+// Plot the fitted model and the original data at the ROI.
+// VISUALIZATION - HARMONIC MODELS
+// 
+// print(ui.Chart.image.series(collectionL5L7.select(index), geometry2, ee.Reducer.mean(), 30)
+//     .setOptions({
+//       title: 'NDVi over time',
+//       lineWidth: 1,
+//       pointSize: 3,
+// }));
+
+
+// // **************** CUMULATIVE ANOMALY FOR SERIES COLLECTION ****************************************************
+Map.addLayer(series,{min:5000,max:35000, bands:['SR_B4','SR_B3','SR_B2']},'Landsat Observation')
+// Calulate NDVI Anamoly and define thresholds of change
+      // Sum of the series
+      var anomoly = series.select(index).sum().mask(mang_buffer).updateMask(referenceMask.not())
+      
+          // Determine the number of good images for each pixel
+          var numimages = series.select(index).count().mask(mang_buffer)
+          
+          // Divide the sum by the number of images to correct for number of images in collection
+          var newanomaly = anomoly.divide(numimages)
+          // print(newanomaly.first(),'test')
+         
+          Map.addLayer(newanomaly,{min: -0.20, max: 0.20,palette: ['#481567FF','#482677FF','#453781FF','#404788FF','#39568CFF',
+                                              '#33638DFF','#2D708EFF','#287D8EFF','#238A8DFF','#1F968BFF',
+                                              '#20A387FF','#29AF7FFF','#3CBB75FF','#55C667FF',
+                                              '#73D055FF','#95D840FF','#B8DE29FF','#DCE319FF','#FDE725FF' ]},index+' anomaly',false)
+         
+        
+          var anomMask = newanomaly.lte(-0.2).selfMask().updateMask(watMask)
+//           // Map.addLayer(anomMask.updateMask(watMask),{palette:['orange']},'Loss from Anomaly 16-20',false)
+// Map.addLayer(anom1.lte(-0.2).selfMask(),{palette:['red']},'Loss from Anomaly 95-2020',false)
+// Map.addLayer(anom0.mosaic().lte(-0.2).selfMask(),{palette:['pink']},'Loss from Anomaly 2000- 2016',false)
+
+//=======================================================================================
+//Export Anomaly Code
+//=======================================================================================
+
+
+Export.image.toAsset({
+  image: newanomaly,
+  description: 'Nigeria_NDVIAnomaly_01-23_1995-2000',
+  region: coast,
+  assetId:'Nigeria_Oil/AnomalyLayers_2023/Nigeria_NDVIAnomaly_01-23_1995-2000',
+  scale: 30,
+  maxPixels: 1e13
+  });
+
+
+//Mask all anomaly layers by the same threshold and mask to mangrove buffer
+var anom95M =anom95.lte(-0.05).selfMask().updateMask(mang_buffer)
+var anom00M =anom00.lte(-0.05).selfMask().updateMask(mang_buffer)
+var anom05M =anom05.lte(-0.05).selfMask().updateMask(mang_buffer)
+var anom10M =anom10.lte(-0.05).selfMask().updateMask(mang_buffer)
+var anom15M =anom15.lte(-0.05).selfMask().updateMask(mang_buffer)
+var anom20M =anom20.lte(-0.05).selfMask().updateMask(mang_buffer)
+
+
+//=======================================================================================
+//Set up Accuracy Layer and Points
+//=======================================================================================
+
+
+var allarea = ee.Image(0).where(buff.select('constant'),1);
+
+//Exclude mangrove from allarea and clip to area of study
+var loss = allarea.where(anomFullThresh,2).clip(geometry);
+
+var loss_95_23 = loss.select(0).eq(2).selfMask().multiply(ee.Image.pixelArea().divide(10000));
+//Calculate the area of loss pixels in Nigeria
+  var stats = loss_95_23.reduceRegion({
+    reducer: ee.Reducer.sum(),
+   // geometry: anomFullM,
+    scale: 30, 
+    maxPixels:1e9
+  });
+  print(
+    'Anom Loss in Nigeria from 1995-2023', stats.get('constant'), 
+    'hectares');
+
+//Loss: 2
+//No Loss: 1
+//Outside of Mangrove: 0
+Export.image.toAsset({
+  image: loss,
+  description: 'NigeriaTotalLoss_AccuracyLayer_2015_2020Aug2023_Thresh05',
+  region: coast,
+  scale: 30,
+  maxPixels: 1e13
+  }); 
+  
+
+
+var lossMask = loss.eq(2)
+var states = ee.FeatureCollection("projects/mangrovescience/Nigeria/nigeria_administrative_boundaries_province_polygon")
+
+Map.addLayer(states)
+Map.addLayer(loss.updateMask(lossMask),{},'loss')
+
+
+
+var stratSamples = loss.stratifiedSample({
+                      numPoints:750,
+                      classBand: 'constant',
+                      region:geometry,
+                      scale: 30,
+                      geometries:true
+        });
+
+
+//Add a 15m Radius buffer around each point
+//-----------------------------------------
+var stratBuff = function(feature) {
+        var num = feature.get('constant');
+            
+        return feature.buffer(15).set('classification_mode', num);
+        };
+
+
+//Map the buffer across all points (see export code below in Step 6)
+//--------------------------------------------------------
+var stratPoints = stratSamples.map(stratBuff)
+
+Map.addLayer(stratPoints,{},'points')
+Map.addLayer(accPoints2,{},'accuracy')
+
+Export.table.toDrive({
+  collection: stratPoints,
+  description:'StratifiedrandomPointsLoss2020',
+  fileFormat: 'SHP',
+});
+
+
+  
+
+var area = states.map(function(feature){ 
+
+  var area = loss.select(0).eq(2).selfMask().multiply(ee.Image.pixelArea()).divide(10000).reduceRegion({
+      reducer:ee.Reducer.sum(),
+      geometry:feature.geometry(100),
+      scale: 30,
+      maxPixels:1e13
+      }).get('constant');
+        
+    
+  return feature.set("AllLoss", area);
+})
+
+print(area)
+
+Export.table.toDrive({
+  collection: area,
+  description:'AllLossByState',
+  fileFormat: 'CSV',
+});
