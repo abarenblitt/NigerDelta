@@ -3,7 +3,7 @@
 // Remote Sensing of Nypa Palm in the Niger Delta
 //
 // Project: Niger Delta Landcover Changes 
-// Code: Ghana NDVI Anomaly Classification and Random Forest Classification
+// Code: Nypa Palm random forest classification
 // Written by: Abigail Barenblitt, NASA Goddard and University of Maryland 
 // Co-authors: Lola Fatoyinbo, NASA Goddard; Celio de Sousa, UMBC
 // Objective: This code uses ALOS to classify areas within Nigeria's mangroves that have been converted to 
