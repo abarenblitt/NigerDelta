@@ -12,7 +12,7 @@
 //=======================================================================================
 //Set Up Map 
 //=======================================================================================
-
+ 
 
 // Create a list of regions that you want to export over. 
 // Add a "name" property to each region so that each export has a different assetId and description. 
@@ -94,7 +94,7 @@ Export.image.toAsset({
 
 // // define years and dates to include in landsat image collection
 var startYear = 1984;    //@@@@@@// what year do you want to start the time series 
-var endyear   = 2022;   //@@@@@@ // what year do you want to end the time series
+var endyear   = 2025;   //@@@@@@ // what year do you want to end the time series
 var startDay  = '01-01';//@@@@@@ // what is the beginning of date filter | month-day
 var endDay    = '12-31';//@@@@@@ // what is the end of date filter | month-day
 
@@ -260,14 +260,17 @@ var endDay    = '12-31';//@@@@@@ // what is the end of date filter | month-day
       // var series_start = '2005-01-01'; //@@@@@@
       // var series_end =  '2009-12-31'; //@@@@@@
       
-    var series_start = '2010-01-01'; //@@@@@@
-      var series_end =  '2014-12-31'; //@@@@@@
+    // var series_start = '2010-01-01'; //@@@@@@
+    //   var series_end =  '2014-12-31'; //@@@@@@
 
-    // var series_start = '2015-01-01'; //@@@@@@
-    //   var series_end =  '2022-12-31'; //@@@@@@
+    var series_start = '2015-01-01'; //@@@@@@
+      var series_end =  '2019-12-31'; //@@@@@@
+    
+    // var series_start = '2020-01-01'; //@@@@@@
+    //   var series_end =  '2023-12-31'; //@@@@@@
     
     // var series_start = '1995-01-01'; //@@@@@@
-    //   var series_end =  '2022-12-31'; //@@@@@@
+    //   var series_end =  '2025-12-31'; //@@@@@@
       
     // var series_start = '1980-01-01'; //@@@@@@
     //   var series_end =  '2000-12-31'; //@@@@@@
@@ -295,9 +298,9 @@ var endDay    = '12-31';//@@@@@@ // what is the end of date filter | month-day
 
 //       // ------- Deteremine mean NDVI for the end of the series -----------
         // Mean of Last 2 years
-        var last = series.select(index).filterDate('2020-01-01','2022-12-31').median().mask(mang_buffer).rename('m')
+        var last = series.select(index).filterDate(series_start,series_end).median().mask(mang_buffer).rename('m')
         // Max of Last 2 years
-        var lastmax = series.select(index).filterDate('2020-01-01','2022-12-31').max().mask(mang_buffer)
+        var lastmax = series.select(index).filterDate(series_start,series_end).max().mask(mang_buffer)
 // var watMask = series.median().select('ndwi').gt(0.13) 
       print(series.filterDate(series_start,series_end).size(),"Number of images in Last Collection")
       // Map.addLayer(lastmax,{min:-0.5,max:0.5},'Mean NDVI end of series',false)
@@ -335,7 +338,7 @@ Map.addLayer(series,{min:5000,max:35000, bands:['SR_B4','SR_B3','SR_B2']},'Lands
          
         
           var anomMask = newanomaly.lte(-0.2).selfMask().updateMask(watMask)
-//           // Map.addLayer(anomMask.updateMask(watMask),{palette:['orange']},'Loss from Anomaly 16-20',false)
+          Map.addLayer(anomMask.updateMask(watMask),{palette:['orange']},'Loss from Anomaly 20-25',false)
 // Map.addLayer(anom1.lte(-0.2).selfMask(),{palette:['red']},'Loss from Anomaly 95-2020',false)
 // Map.addLayer(anom0.mosaic().lte(-0.2).selfMask(),{palette:['pink']},'Loss from Anomaly 2000- 2016',false)
 
@@ -346,9 +349,9 @@ Map.addLayer(series,{min:5000,max:35000, bands:['SR_B4','SR_B3','SR_B2']},'Lands
 
 Export.image.toAsset({
   image: newanomaly,
-  description: 'Nigeria_NDVIAnomaly_01-23_1995-2000',
+  description: 'Nigeria_NDVIAnomaly_05-25_2020-2025',
   region: coast,
-  assetId:'Nigeria_Oil/AnomalyLayers_2023/Nigeria_NDVIAnomaly_01-23_1995-2000',
+  assetId:'Nigeria_Oil/AnomalyLayers_2023/Nigeria_NDVIAnomaly_05-25_2020-2025',
   scale: 30,
   maxPixels: 1e13
   });
@@ -460,3 +463,4 @@ Export.table.toDrive({
   description:'AllLossByState',
   fileFormat: 'CSV',
 });
+
