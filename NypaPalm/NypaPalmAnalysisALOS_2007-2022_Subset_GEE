@@ -401,12 +401,12 @@ Export.image.toAsset({
 //   description:'2020FullValidApril2021'
 // });
 
-// //Export Stratified Random Poiints
-// Export.table.toAsset({
-//   collection: ee.FeatureCollection(studyArea),
-//   description:'NypaStudyAreaFitted',
-//   // fileFormat: 'SHP',
-// }); 
+//Export Stratified Random Poiints
+Export.table.toAsset({
+  collection: ee.FeatureCollection(geometry),
+  description:'NypaStudyAreaFittedFinal',
+  // fileFormat: 'SHP',
+}); 
 
 print('Valid n =', samplesALOS.aggregate_count('.all'));
 print('Valid n Nypa =', samplesALOS2020.filterMetadata('landcover', 'equals', 1).aggregate_count('.all'));
@@ -441,6 +441,17 @@ var nypaTotal = ee.Number(final_Nypa.gt(0).selfMask().multiply(ee.Image.pixelAre
                   }).get('Class_mode')).divide(10000)
   
 print(nypaTotal, 'Total Nypa in Hectares 2007')
+
+var nypaTotalSub = ee.Number(final_Nypa.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: studyAreaB,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(nypaTotalSub, 'Total Nypa in Hectares 2007 SUBSET')
+
 
 
 var waterTotal = ee.Number(final_Water.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
@@ -479,6 +490,16 @@ var nypaTotal2020 = ee.Number(final_Nypa2020.gt(0).selfMask().multiply(ee.Image.
                   }).get('Class_mode')).divide(10000)
   
 print(nypaTotal2020, 'Total Nypa in Hectares 2020')
+
+var nypaTotal2020Sub = ee.Number(final_Nypa2020.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: studyAreaB,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(nypaTotal2020Sub, 'Total Nypa in Hectares 2020 SUBSET')
 
 
 var waterTotal2020 = ee.Number(final_Water2020.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
@@ -551,7 +572,19 @@ var testAccuracy = training2.errorMatrix('Class_mode','Class_Chec',[0,1,2,3,4,5,
 print('Validation error matrix: ', testAccuracy); //Generates the error matrix to demonstrate accuracy by landcover class type
 print('Validation overall accuracy: ', testAccuracy.accuracy());
 
+//CrossRiver
+var CR = studyArea.filterMetadata('name', 'contains', 'Cross')
+Map.addLayer(CR)
 
+var nypaTotal2020 = ee.Number(final_Nypa2020.gt(0).selfMask().multiply(ee.Image.pixelArea()).reduceRegion({
+                  geometry: CR,
+                  reducer: ee.Reducer.sum(),
+                  scale:25, 
+                  maxPixels: 1e16,
+                  crs:'EPSG:4326',
+                  }).get('Class_mode')).divide(10000)
+  
+print(nypaTotal2020, 'Total Nypa in Hectares Cross River 2020')
 //*****************************************************************************
 //                      End Code
 //*****************************************************************************
